@@ -1,4 +1,4 @@
-import { StyleSheet, Platform } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { responsiveSize, screenDimensions } from '../utils/responsiveUtils';
 
 export const homeScreenStyles = StyleSheet.create({
@@ -137,5 +137,24 @@ export const homeScreenStyles = StyleSheet.create({
   nextUserInfo: {
     color: 'rgba(255, 255, 255, 0.8)',
     fontSize: responsiveSize(9),
+  },
+  // Connection status overlay
+  connectionOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  connectionText: {
+    color: '#fff',
+    fontSize: responsiveSize(16),
+    fontWeight: '600',
+    marginTop: responsiveSize(12),
+    textAlign: 'center',
   },
 });

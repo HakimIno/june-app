@@ -1,12 +1,13 @@
-import React from 'react';
-import { View, Text } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons, AntDesign } from '@expo/vector-icons';
+import { AntDesign, Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import React from 'react';
+import { ActivityIndicator, Text, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
-import { User } from '../../types/user';
+import { RTCView } from 'react-native-webrtc';
 import { homeScreenStyles } from '../../styles/homeScreenStyles';
+import { User } from '../../types/user';
 import { responsiveSize } from '../../utils/responsiveUtils';
 
 interface MainVideoAreaProps {
@@ -16,6 +17,11 @@ interface MainVideoAreaProps {
   panGestureRef: React.RefObject<any>;
   panGesture: any;
   animatedCardStyle: any;
+  // WebRTC props
+  remoteStream?: any;
+  isConnected: boolean;
+  isConnecting: boolean;
+  isSearching: boolean;
 }
 
 export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
@@ -25,7 +31,12 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
   panGestureRef,
   panGesture,
   animatedCardStyle,
+  remoteStream,
+  isConnected,
+  isConnecting,
+  isSearching,
 }) => {
+
   return (
     <View style={homeScreenStyles.videoContainer}>
       <GestureDetector gesture={panGesture}>
@@ -35,11 +46,32 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
             style={homeScreenStyles.mainVideo}
           >
             <View style={homeScreenStyles.videoFrame}>
-              {/* Simulated video background */}
-              <LinearGradient
-                colors={['#f093fb', '#f5576c']}
-                style={homeScreenStyles.videoBackground}
-              />
+              {/* Remote video stream or placeholder */}
+              {remoteStream ? (
+                <RTCView
+                  key={`remote-${remoteStream._id}`}
+                  streamURL={remoteStream.toURL()}
+                  style={homeScreenStyles.videoBackground}
+                  objectFit="cover"
+                  zOrder={0}
+                  mirror={false}
+                />
+              ) : (
+                <LinearGradient
+                  colors={['#f093fb', '#f5576c']}
+                  style={homeScreenStyles.videoBackground}
+                />
+              )}
+
+              {/* Connection status overlay */}
+              {(isConnecting || isSearching) && (
+                <View style={homeScreenStyles.connectionOverlay}>
+                  <ActivityIndicator size="large" color="#fff" />
+                  <Text style={homeScreenStyles.connectionText}>
+                    {isSearching ? 'กำลังหาเพื่อนใหม่...' : 'กำลังเชื่อมต่อ...'}
+                  </Text>
+                </View>
+              )}
 
               {/* Interests Tags */}
               <View style={homeScreenStyles.interestsContainer}>

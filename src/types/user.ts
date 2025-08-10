@@ -13,6 +13,7 @@ export interface CallState {
   isMuted: boolean;
   isVideoOn: boolean;
   isActive: boolean;
+  status: 'online' | 'away' | 'offline';
 }
 
 export interface SwipeState {
