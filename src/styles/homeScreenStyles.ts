@@ -36,6 +36,15 @@ export const homeScreenStyles = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: screenDimensions.height * 0.6,
+    backgroundColor: '#000000',
+    ...(Platform.OS === 'ios' ? {
+      shouldRasterizeIOS: true,
+      rasterizationScale: 2,
+      drawingCache: true,
+    } : {
+      renderToHardwareTextureAndroid: true,
+      needsOffscreenAlphaCompositing: false,
+    }),
   },
   interestsContainer: {
     position: 'absolute',
@@ -174,5 +183,52 @@ export const homeScreenStyles = StyleSheet.create({
     fontWeight: '600',
     marginTop: responsiveSize(12),
     textAlign: 'center',
+  },
+
+  // Video quality indicator
+  videoQualityIndicator: {
+    position: 'absolute',
+    top: responsiveSize(60),
+    right: responsiveSize(20),
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: responsiveSize(12),
+    paddingHorizontal: responsiveSize(8),
+    paddingVertical: responsiveSize(4),
+    zIndex: 10,
+  },
+  videoQualityText: {
+    color: '#ffffff',
+    fontSize: responsiveSize(12),
+    fontWeight: '600',
+  },
+  networkStatsContainer: {
+    position: 'absolute',
+    top: responsiveSize(100),
+    right: responsiveSize(20),
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: responsiveSize(8),
+    padding: responsiveSize(8),
+    zIndex: 9,
+    minWidth: responsiveSize(100),
+  },
+  networkStatsText: {
+    color: '#ffffff',
+    fontSize: responsiveSize(10),
+    marginVertical: responsiveSize(1),
+  },
+
+  // Enhanced video container
+  enhancedVideoContainer: {
+    flex: 1,
+    backgroundColor: '#000000',
+    borderRadius: responsiveSize(24),
+    overflow: 'hidden',
+    // Hardware acceleration
+    ...(Platform.OS === 'android' ? {
+      elevation: 0,
+      renderToHardwareTextureAndroid: true,
+    } : {
+      shadowOpacity: 0,
+    }),
   },
 });

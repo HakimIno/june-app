@@ -112,6 +112,31 @@ export const useWebRTC = () => {
     }
   }, []);
 
+  // Video quality controls
+  const setVideoQuality = useCallback(async (quality: 'high' | 'medium' | 'low') => {
+    try {
+      await webRTCService.setVideoQuality(quality);
+    } catch (error) {
+      console.error('Failed to set video quality:', error);
+    }
+  }, []);
+
+  const getCurrentVideoQuality = useCallback(() => {
+    return webRTCService.getCurrentVideoQuality();
+  }, []);
+
+  const getNetworkStats = useCallback(() => {
+    return webRTCService.getNetworkStats();
+  }, []);
+
+  const getSmartProcessorInfo = useCallback(() => {
+    return webRTCService.getSmartProcessorInfo();
+  }, []);
+
+  const getQualityRecommendation = useCallback(async () => {
+    return await webRTCService.getQualityRecommendation();
+  }, []);
+
   // Cleanup
   const cleanup = useCallback(() => {
     webRTCService.dispose();
@@ -388,6 +413,13 @@ export const useWebRTC = () => {
     switchCamera,
     boostAudio,
     cleanup,
+    
+    // Video quality controls
+    setVideoQuality,
+    getCurrentVideoQuality,
+    getNetworkStats,
+    getSmartProcessorInfo,
+    getQualityRecommendation,
     
     // Status getters
     isConnected: webrtcState.isConnected,

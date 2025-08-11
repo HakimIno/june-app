@@ -7,6 +7,7 @@ import {
 } from 'react-native-webrtc';
 import { WebRTCConfig, WebRTCState } from '../types/webrtc';
 import { signalingService } from './signalingService';
+import { smartVideoProcessor } from './videoProcessor';
 
 class WebRTCService {
     private peerConnection: RTCPeerConnection | null = null;
@@ -54,32 +55,322 @@ class WebRTCService {
         }
     }
 
+    // Video quality configuration based on network conditions
+    private videoQualityConfig = {
+        high: {
+            width: { min: 1280, ideal: 1920, max: 1920 },
+            height: { min: 720, ideal: 1080, max: 1080 },
+            frameRate: { min: 24, ideal: 30, max: 30 },
+            bitrate: 2000000, // 2 Mbps
+        },
+        medium: {
+            width: { min: 854, ideal: 1280, max: 1280 },
+            height: { min: 480, ideal: 720, max: 720 },
+            frameRate: { min: 20, ideal: 24, max: 24 },
+            bitrate: 1000000, // 1 Mbps
+        },
+        low: {
+            width: { min: 640, ideal: 854, max: 854 },
+            height: { min: 360, ideal: 480, max: 480 },
+            frameRate: { min: 15, ideal: 20, max: 20 },
+            bitrate: 500000, // 0.5 Mbps
+        }
+    };
+
+    private currentVideoQuality: 'high' | 'medium' | 'low' = 'high';
+    private networkMonitor: {
+        rtt: number;
+        packetsLost: number;
+        bandwidth: number;
+        jitter: number;
+    } = {
+        rtt: 0,
+        packetsLost: 0,
+        bandwidth: 0,
+        jitter: 0
+    };
+
+    // For bandwidth calculation
+    private previousStats: { bytesSent?: number; bytesReceived?: number } | null = null;
+    private previousStatsTime: number | null = null;
+
+    // Adaptive video quality based on network conditions (enhanced with Rust processing)
+    async adaptVideoQuality(): Promise<void> {
+        if (!this.peerConnection) return;
+
+        try {
+            const stats = await this.peerConnection.getStats();
+            let inboundVideoStats: any = null;
+            let candidatePairStats: any = null;
+            let outboundVideoStats: any = null;
+            
+            // Collect relevant stats
+            stats.forEach((report: any) => {
+                if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
+                    inboundVideoStats = report;
+                } else if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                    candidatePairStats = report;
+                } else if (report.type === 'outbound-rtp' && report.mediaType === 'video') {
+                    outboundVideoStats = report;
+                }
+            });
+
+            // Update network monitoring data with improved calculations
+            if (inboundVideoStats) {
+                this.networkMonitor.packetsLost = inboundVideoStats.packetsLost || 0;
+                this.networkMonitor.jitter = (inboundVideoStats.jitter || 0) * 1000; // Convert to ms
+            }
+            
+            if (candidatePairStats) {
+                this.networkMonitor.rtt = (candidatePairStats.currentRoundTripTime || 0) * 1000; // Convert to ms
+            }
+            
+            // Calculate bandwidth from actual WebRTC stats
+            let estimatedBandwidth = 2_000_000; // Default 2 Mbps
+            
+            if (outboundVideoStats) {
+                // Calculate throughput from bytesSent over time
+                const currentTime = Date.now();
+                const bytesSent = outboundVideoStats.bytesSent || 0;
+                
+                if (this.previousStats && this.previousStatsTime) {
+                    const timeDiff = (currentTime - this.previousStatsTime) / 1000; // seconds
+                    const bytesDiff = bytesSent - (this.previousStats.bytesSent || 0);
+                    
+                    if (timeDiff > 0 && bytesDiff > 0) {
+                        // Calculate actual throughput in bits per second
+                        const throughputBps = (bytesDiff * 8) / timeDiff;
+                        estimatedBandwidth = Math.min(Math.max(throughputBps, 500_000), 50_000_000); // Cap between 0.5-50 Mbps
+                        console.log('Calculated throughput:', {
+                            bytesDiff,
+                            timeDiff: timeDiff.toFixed(2),
+                            throughputMbps: (throughputBps / 1_000_000).toFixed(2)
+                        });
+                    }
+                }
+                
+                // Store current stats for next calculation
+                this.previousStats = { bytesSent };
+                this.previousStatsTime = currentTime;
+            } else if (inboundVideoStats) {
+                // Use inbound stats if outbound not available
+                const bytesReceived = inboundVideoStats.bytesReceived || 0;
+                const currentTime = Date.now();
+                
+                if (this.previousStats && this.previousStatsTime) {
+                    const timeDiff = (currentTime - this.previousStatsTime) / 1000;
+                    const bytesDiff = bytesReceived - (this.previousStats.bytesReceived || 0);
+                    
+                    if (timeDiff > 0 && bytesDiff > 0) {
+                        const throughputBps = (bytesDiff * 8) / timeDiff;
+                        estimatedBandwidth = Math.min(Math.max(throughputBps, 500_000), 50_000_000);
+                    }
+                }
+                
+                this.previousStats = { bytesReceived };
+                this.previousStatsTime = currentTime;
+            }
+            
+            this.networkMonitor.bandwidth = estimatedBandwidth;
+
+            console.log('Network stats:', {
+                rtt: this.networkMonitor.rtt,
+                packetsLost: this.networkMonitor.packetsLost,
+                bandwidth: (this.networkMonitor.bandwidth / 1_000_000).toFixed(2) + ' Mbps',
+                jitter: this.networkMonitor.jitter
+            });
+
+            // Use smart video processor for intelligent quality adaptation
+            const recommendation = smartVideoProcessor.analyzeNetwork({
+                rtt: this.networkMonitor.rtt,
+                packet_loss: this.networkMonitor.packetsLost,
+                bandwidth: this.networkMonitor.bandwidth,
+                jitter: this.networkMonitor.jitter,
+            });
+
+            console.log('Quality recommendation:', {
+                current: this.currentVideoQuality,
+                recommended: recommendation.quality_level,
+                confidence: recommendation.confidence,
+                bandwidth_mbps: (this.networkMonitor.bandwidth / 1_000_000).toFixed(2)
+            });
+
+            // Apply recommendation with lower confidence threshold for better responsiveness
+            if (recommendation.confidence > 0.3 && recommendation.quality_level !== this.currentVideoQuality) {
+                console.log(`Smart video adapter recommending quality change from ${this.currentVideoQuality} to ${recommendation.quality_level}`);
+                console.log('Recommendation details:', {
+                    bitrate: recommendation.recommended_bitrate,
+                    fps: recommendation.recommended_fps,
+                    resolution: recommendation.recommended_resolution,
+                    confidence: recommendation.confidence,
+                });
+                
+                await this.changeVideoQualityWithRecommendation(recommendation);
+            }
+
+        } catch (error) {
+            console.error('Failed to adapt video quality:', error);
+        }
+    }
+
+                // Enhanced quality change method using smart recommendations
+    private async changeVideoQualityWithRecommendation(recommendation: any): Promise<void> {
+        try {
+            this.currentVideoQuality = recommendation.quality_level;
+            console.log(`Smart video quality changed to ${this.currentVideoQuality}:`, {
+                bitrate: recommendation.recommended_bitrate,
+                fps: recommendation.recommended_fps,
+                resolution: recommendation.recommended_resolution,
+                processorType: smartVideoProcessor.isUsingRustProcessor() ? 'rust' : 'javascript'
+            });
+            
+            // Update video config based on recommendation
+            const videoConfig = {
+                width: recommendation.recommended_resolution === '1920x1080' ? 
+                    { min: 1280, ideal: 1920, max: 1920 } :
+                    recommendation.recommended_resolution === '1280x720' ?
+                    { min: 854, ideal: 1280, max: 1280 } :
+                    { min: 640, ideal: 854, max: 854 },
+                height: recommendation.recommended_resolution === '1920x1080' ? 
+                    { min: 720, ideal: 1080, max: 1080 } :
+                    recommendation.recommended_resolution === '1280x720' ?
+                    { min: 480, ideal: 720, max: 720 } :
+                    { min: 360, ideal: 480, max: 480 },
+                frameRate: { 
+                    min: Math.max(15, recommendation.recommended_fps - 10), 
+                    ideal: recommendation.recommended_fps, 
+                    max: recommendation.recommended_fps 
+                },
+                bitrate: recommendation.recommended_bitrate,
+            };
+
+            if (this.localStream && this.peerConnection) {
+                const sender = this.peerConnection.getSenders().find(s => 
+                    s.track && s.track.kind === 'video'
+                );
+
+                if (sender && sender.track) {
+                    // Apply new constraints to video track
+                    await sender.track.applyConstraints({
+                        width: videoConfig.width,
+                        height: videoConfig.height,
+                        frameRate: videoConfig.frameRate,
+                        facingMode: 'user',
+                    });
+
+                    // Update encoding parameters with smart bitrate
+                    const params = sender.getParameters();
+                    if (params.encodings && params.encodings.length > 0) {
+                        params.encodings[0].maxBitrate = recommendation.recommended_bitrate;
+                        params.encodings[0].maxFramerate = recommendation.recommended_fps;
+                        
+                        // Advanced encoding settings based on quality level
+                        if (recommendation.quality_level === 'high') {
+                            params.encodings[0].scaleResolutionDownBy = 1.0;
+                            // Note: priority is not supported in React Native WebRTC
+                        } else if (recommendation.quality_level === 'medium') {
+                            params.encodings[0].scaleResolutionDownBy = 1.2;
+                        } else {
+                            params.encodings[0].scaleResolutionDownBy = 1.5;
+                        }
+                        
+                        await sender.setParameters(params);
+                    }
+
+                    console.log(`Smart video quality changed to ${recommendation.quality_level}:`, {
+                        bitrate: recommendation.recommended_bitrate,
+                        fps: recommendation.recommended_fps,
+                        resolution: recommendation.recommended_resolution,
+                        processorType: smartVideoProcessor.getProcessorInfo().type,
+                    });
+                    
+                    this.emit('videoQualityChanged', { 
+                        quality: recommendation.quality_level, 
+                        config: videoConfig,
+                        recommendation: recommendation,
+                        processorInfo: smartVideoProcessor.getProcessorInfo(),
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to change video quality with smart recommendation:', error);
+        }
+    }
+
+    // Change video quality dynamically
+    async changeVideoQuality(quality: 'high' | 'medium' | 'low'): Promise<void> {
+        try {
+            this.currentVideoQuality = quality;
+            const videoConfig = this.videoQualityConfig[quality];
+
+            if (this.localStream && this.peerConnection) {
+                const sender = this.peerConnection.getSenders().find(s => 
+                    s.track && s.track.kind === 'video'
+                );
+
+                if (sender && sender.track) {
+                    // Apply new constraints to video track
+                    await sender.track.applyConstraints({
+                        ...videoConfig,
+                        facingMode: 'user',
+                    });
+
+                    // Update encoding parameters
+                    const params = sender.getParameters();
+                    if (params.encodings && params.encodings.length > 0) {
+                        params.encodings[0].maxBitrate = videoConfig.bitrate;
+                        params.encodings[0].maxFramerate = videoConfig.frameRate.ideal;
+                        await sender.setParameters(params);
+                    }
+
+                    console.log(`Video quality changed to ${quality}:`, videoConfig);
+                    this.emit('videoQualityChanged', { quality, config: videoConfig });
+                }
+            }
+        } catch (error) {
+            console.error('Failed to change video quality:', error);
+        }
+    }
+
     private async setupLocalStream(): Promise<void> {
         try {
+            const videoConfig = this.videoQualityConfig[this.currentVideoQuality];
+            
             const constraints = {
                 video: {
-                    width: { min: 640, ideal: 1280, max: 1920 },
-                    height: { min: 480, ideal: 720, max: 1080 },
-                    frameRate: { min: 15, ideal: 30, max: 60 },
+                    ...videoConfig,
                     facingMode: 'user', // front camera
                     aspectRatio: 16/9,
+                    // Enhanced video quality settings
+                    advanced: [{
+                        width: videoConfig.width,
+                        height: videoConfig.height,
+                        frameRate: videoConfig.frameRate,
+                        googNoiseReduction: true,
+                        googTemporalLayeredScreencast: true,
+                        googCpuOveruseDetection: true,
+                        googLeakyBucket: true,
+                        googPayloadPadding: true,
+                        googScreencastMinBitrate: videoConfig.bitrate / 4,
+                        googHighStartBitrate: videoConfig.bitrate,
+                        googVeryHighBitrate: videoConfig.bitrate * 1.2,
+                    }]
                 },
                 audio: {
-                    echoCancellation: false,  // Disable to preserve volume
-                    noiseSuppression: false,  // Disable to increase volume
-                    autoGainControl: false,   // Disable to allow higher volume
+                    echoCancellation: true,   // Enable for better quality
+                    noiseSuppression: true,   // Enable for cleaner audio
+                    autoGainControl: true,    // Enable for consistent volume
                     sampleRate: 48000,
                     channelCount: 2,          // Stereo for better volume
                     sampleSize: 16,
-                    // Remove unsupported volume property
-                    googEchoCancellation: false,
-                    googNoiseSuppression: false,
-                    googAutoGainControl: false,
-                    googHighpassFilter: false,
-                    googTypingNoiseDetection: false,
+                    googEchoCancellation: true,
+                    googNoiseSuppression: true,
+                    googAutoGainControl: true,
+                    googHighpassFilter: true,
+                    googTypingNoiseDetection: true,
                     googAudioMirroring: false,
-                    googDAEchoCancellation: false,
-                    googNoiseReduction: false,
+                    googDAEchoCancellation: true,
+                    googNoiseReduction: true,
                 },
             };
 
@@ -206,22 +497,27 @@ class WebRTCService {
                     this.state.isConnected = true;
                     this.state.isConnecting = false;
                     this.emit('connected', true);
+                    // Start network monitoring when connected
+                    this.startNetworkMonitoring();
                     break;
                 case 'disconnected':
                     this.state.isConnected = false;
                     this.state.isConnecting = false;
                     this.emit('disconnected', false);
+                    this.stopNetworkMonitoring();
                     break;
                 case 'failed':
                     console.warn('Connection failed, attempting restart...');
                     this.state.isConnected = false;
                     this.state.isConnecting = false;
+                    this.stopNetworkMonitoring();
                     this.handleConnectionFailure();
                     break;
                 case 'closed':
                     this.state.isConnected = false;
                     this.state.isConnecting = false;
                     this.emit('disconnected', false);
+                    this.stopNetworkMonitoring();
                     break;
                 case 'connecting':
                     this.state.isConnecting = true;
@@ -578,6 +874,86 @@ class WebRTCService {
         }
     }
 
+    // Network monitoring
+    private networkMonitoringInterval: NodeJS.Timeout | null = null;
+
+    private startNetworkMonitoring(): void {
+        if (this.networkMonitoringInterval) {
+            clearInterval(this.networkMonitoringInterval);
+        }
+
+        // Start with optimistic high quality
+        this.currentVideoQuality = 'high';
+
+        this.networkMonitoringInterval = setInterval(async () => {
+            await this.adaptVideoQuality();
+        }, 3000); // Monitor every 3 seconds
+
+        console.log('Network monitoring started');
+    }
+
+    private stopNetworkMonitoring(): void {
+        if (this.networkMonitoringInterval) {
+            clearInterval(this.networkMonitoringInterval);
+            this.networkMonitoringInterval = null;
+        }
+        console.log('Network monitoring stopped');
+    }
+
+    // Manual video quality controls
+    async setVideoQuality(quality: 'high' | 'medium' | 'low'): Promise<void> {
+        await this.changeVideoQuality(quality);
+    }
+
+    getCurrentVideoQuality(): 'high' | 'medium' | 'low' {
+        return this.currentVideoQuality;
+    }
+
+    getNetworkStats(): typeof this.networkMonitor {
+        return { ...this.networkMonitor };
+    }
+
+    // Get smart video processor information
+    getSmartProcessorInfo(): { type: 'rust' | 'javascript'; version: string; isAvailable: boolean } {
+        const info = smartVideoProcessor.getProcessorInfo();
+        return {
+            ...info,
+            isAvailable: smartVideoProcessor.isUsingRustProcessor(),
+        };
+    }
+
+    // Get intelligent quality recommendation without applying it
+    async getQualityRecommendation(): Promise<any> {
+        try {
+            if (!this.peerConnection) return null;
+
+            const stats = await this.peerConnection.getStats();
+            
+            // Update network monitoring data
+            stats.forEach((report: any) => {
+                if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
+                    this.networkMonitor.packetsLost = report.packetsLost || 0;
+                    this.networkMonitor.jitter = report.jitter || 0;
+                } else if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                    this.networkMonitor.rtt = report.currentRoundTripTime * 1000 || 0;
+                } else if (report.type === 'outbound-rtp' && report.mediaType === 'video') {
+                    this.networkMonitor.bandwidth = report.bytesSent || 0;
+                }
+            });
+
+            // Get recommendation from smart processor
+            return smartVideoProcessor.analyzeNetwork({
+                rtt: this.networkMonitor.rtt,
+                packet_loss: this.networkMonitor.packetsLost,
+                bandwidth: this.networkMonitor.bandwidth,
+                jitter: this.networkMonitor.jitter,
+            });
+        } catch (error) {
+            console.error('Failed to get quality recommendation:', error);
+            return null;
+        }
+    }
+
     // Restart ICE connection
     private async restartIce(): Promise<void> {
         try {
@@ -594,6 +970,7 @@ class WebRTCService {
 
     // Cleanup
     dispose(): void {
+        this.stopNetworkMonitoring();
         this.endCall();
 
         if (this.localStream) {
@@ -606,6 +983,14 @@ class WebRTCService {
             isConnected: false,
             hasLocalStream: false,
             hasRemoteStream: false,
+        };
+
+        // Reset network monitoring state
+        this.networkMonitor = {
+            rtt: 0,
+            packetsLost: 0,
+            bandwidth: 0,
+            jitter: 0
         };
 
         this.listeners.clear();

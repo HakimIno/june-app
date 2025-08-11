@@ -34,6 +34,9 @@ const HomeScreen = () => {
     toggleVideo,
     switchCamera,
     boostAudio,
+    // Video quality controls
+    getCurrentVideoQuality,
+    getNetworkStats,
   } = useWebRTC();
 
   const handleNext = () => {
@@ -110,6 +113,9 @@ const HomeScreen = () => {
           isConnected={isConnected}
           isConnecting={isConnecting}
           isSearching={isSearching}
+          getCurrentVideoQuality={getCurrentVideoQuality}
+          getNetworkStats={getNetworkStats}
+          showVideoQualityIndicator={true}
         />
 
         {/* Self Video - Picture in Picture */}

@@ -1,11 +1,12 @@
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Text, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { RTCView } from 'react-native-webrtc';
 import { FloatingParticles } from '../common';
+import { VideoQualityIndicator } from './VideoQualityIndicator';
 import { homeScreenStyles } from '../../styles/homeScreenStyles';
 import { User } from '../../types/user';
 import { detectDevicePerformance } from '../../utils/performanceUtils';
@@ -22,6 +23,15 @@ interface MainVideoAreaProps {
   isConnected: boolean;
   isConnecting: boolean;
   isSearching: boolean;
+  // Video quality props
+  getCurrentVideoQuality?: () => 'high' | 'medium' | 'low';
+  getNetworkStats?: () => {
+    rtt: number;
+    packetsLost: number;
+    bandwidth: number;
+    jitter: number;
+  };
+  showVideoQualityIndicator?: boolean;
 }
 
 export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
@@ -35,6 +45,9 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
   isConnected,
   isConnecting,
   isSearching,
+  getCurrentVideoQuality,
+  getNetworkStats,
+  showVideoQualityIndicator = true,
 }) => {
   const devicePerformance = detectDevicePerformance();
 
@@ -60,10 +73,19 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
                 <RTCView
                   key={`remote-${remoteStream._id}`}
                   streamURL={remoteStream.toURL()}
-                  style={homeScreenStyles.videoBackground}
+                  style={[homeScreenStyles.videoBackground, {
+                    // Enhanced video quality settings
+                    backgroundColor: '#000000',
+                    borderRadius: 0,
+                  }]}
                   objectFit="cover"
                   zOrder={2}
                   mirror={false}
+                  // Enable hardware acceleration if available
+                  {...(Platform.OS === 'ios' ? {
+                    renderingMode: 'hardware',
+                    videoTrackId: remoteStream.getVideoTracks()[0]?.id,
+                  } : {})}
                 />
               ) : (
                 <LinearGradient
@@ -71,6 +93,15 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
                   style={homeScreenStyles.videoBackground}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
+                />
+              )}
+
+              {/* Video Quality Indicator */}
+              {showVideoQualityIndicator && remoteStream && getCurrentVideoQuality && getNetworkStats && (
+                <VideoQualityIndicator
+                  currentQuality={getCurrentVideoQuality()}
+                  networkStats={getNetworkStats()}
+                  showNetworkStats={__DEV__}
                 />
               )}
 
