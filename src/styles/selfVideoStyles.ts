@@ -1,14 +1,13 @@
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { responsiveSize, screenDimensions } from '../utils/responsiveUtils';
 
 export const selfVideoStyles = StyleSheet.create({
   selfVideoContainer: {
     position: 'absolute',
-    bottom: responsiveSize(10),
+    bottom: 0,
     left: 0,
     right: 0,
     height: screenDimensions.isTablet ? screenDimensions.height * 0.45 : screenDimensions.height * 0.4,
-    paddingHorizontal: responsiveSize(5),
   },
   selfVideo: {
     flex: 1,

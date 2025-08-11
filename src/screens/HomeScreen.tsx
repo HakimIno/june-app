@@ -97,7 +97,6 @@ const HomeScreen = () => {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaView style={homeScreenStyles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#000" />
 
         {/* Main Video Area with Swipe */}
         <MainVideoArea

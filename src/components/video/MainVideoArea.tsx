@@ -1,4 +1,3 @@
-import { AntDesign, Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
@@ -6,9 +5,10 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { RTCView } from 'react-native-webrtc';
+import { FloatingParticles } from '../common';
 import { homeScreenStyles } from '../../styles/homeScreenStyles';
 import { User } from '../../types/user';
-import { responsiveSize } from '../../utils/responsiveUtils';
+import { detectDevicePerformance } from '../../utils/performanceUtils';
 
 interface MainVideoAreaProps {
   currentUser: User;
@@ -36,6 +36,7 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
   isConnecting,
   isSearching,
 }) => {
+  const devicePerformance = detectDevicePerformance();
 
   return (
     <View style={homeScreenStyles.videoContainer}>
@@ -46,6 +47,14 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
             style={homeScreenStyles.mainVideo}
           >
             <View style={homeScreenStyles.videoFrame}>
+              {/* Background Effects */}
+              <FloatingParticles 
+                count={remoteStream ? devicePerformance.recommendedParticleCount / 2 : devicePerformance.recommendedParticleCount}
+                colors={['#667eea', '#764ba2', '#f093fb', '#f5576c']}
+                isActive={!remoteStream || isSearching || isConnecting}
+                lowPowerMode={devicePerformance.shouldUseLowPowerMode}
+              />
+              
               {/* Remote video stream or placeholder */}
               {remoteStream ? (
                 <RTCView
@@ -53,13 +62,15 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
                   streamURL={remoteStream.toURL()}
                   style={homeScreenStyles.videoBackground}
                   objectFit="cover"
-                  zOrder={0}
+                  zOrder={2}
                   mirror={false}
                 />
               ) : (
                 <LinearGradient
-                  colors={['#f093fb', '#f5576c']}
+                  colors={['#667eea', '#764ba2', '#f093fb']}
                   style={homeScreenStyles.videoBackground}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
                 />
               )}
 
@@ -73,33 +84,6 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
                 </View>
               )}
 
-              {/* Interests Tags */}
-              <View style={homeScreenStyles.interestsContainer}>
-                {currentUser?.interests.map((interest, index) => (
-                  <BlurView key={index} intensity={30} style={homeScreenStyles.interestTag}>
-                    <Text style={homeScreenStyles.interestText}>{interest}</Text>
-                  </BlurView>
-                ))}
-              </View>
-
-              {/* Audio indicator */}
-              <BlurView intensity={80} style={homeScreenStyles.audioIndicator}>
-                <Ionicons name="mic" size={responsiveSize(16)} color="#fff" />
-                <View style={homeScreenStyles.audioWaves}>
-                  <View style={[homeScreenStyles.audioWave, { height: responsiveSize(8) }]} />
-                  <View style={[homeScreenStyles.audioWave, { height: responsiveSize(12) }]} />
-                  <View style={[homeScreenStyles.audioWave, { height: responsiveSize(6) }]} />
-                  <View style={[homeScreenStyles.audioWave, { height: responsiveSize(10) }]} />
-                </View>
-              </BlurView>
-
-              {/* Swipe Hint */}
-              {!isSwipeMode && (
-                <View style={homeScreenStyles.swipeHint}>
-                  <AntDesign name="arrowright" size={responsiveSize(24)} color="rgba(255,255,255,0.8)" />
-                  <Text style={homeScreenStyles.swipeHintText}>ปัดขวาเพื่อหาเพื่อนใหม่</Text>
-                </View>
-              )}
             </View>
           </LinearGradient>
         </Animated.View>
