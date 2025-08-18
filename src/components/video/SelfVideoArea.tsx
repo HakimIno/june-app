@@ -89,7 +89,7 @@ export const SelfVideoArea: React.FC<SelfVideoAreaProps> = ({
         
         {/* Video disabled overlay */}
         {localStream && !isVideoEnabled && (
-          <View style={[selfVideoStyles.selfVideoBackground, { backgroundColor: 'rgba(0,0,0,0.8)', position: 'absolute', justifyContent: 'center', alignItems: 'center' }]}>
+          <View style={[selfVideoStyles.selfVideoBackground, { backgroundColor: 'rgba(0,0,0,1)', position: 'absolute', justifyContent: 'center', alignItems: 'center' }]}>
             <Ionicons name="videocam-off" size={responsiveSize(30)} color="#fff" />
             <Text style={{ color: '#fff', marginTop: 8, fontSize: responsiveSize(12) }}>Video Off</Text>
           </View>

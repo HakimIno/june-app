@@ -1,15 +1,15 @@
 import { BlurView } from 'expo-blur';
-import { LinearGradient } from 'expo-linear-gradient';
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ActivityIndicator, Platform, Text, View } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 import { RTCView } from 'react-native-webrtc';
-import { FloatingParticles } from '../common';
-import { VideoQualityIndicator } from './VideoQualityIndicator';
+import { FloatingParticles, FluidBackground } from '../common';
 import { homeScreenStyles } from '../../styles/homeScreenStyles';
 import { User } from '../../types/user';
 import { detectDevicePerformance } from '../../utils/performanceUtils';
+
+
 
 interface MainVideoAreaProps {
   currentUser: User;
@@ -51,62 +51,74 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
 }) => {
   const devicePerformance = detectDevicePerformance();
 
+  // Dynamic configuration based on connection state
+  const backgroundConfig = useMemo(() => {
+    if (isConnecting || isSearching) {
+      return {
+        intensity: 'high' as const,
+        interval: 30000,
+        palette: 'ocean' as const
+      };
+    }
+    
+    if (remoteStream) {
+      return {
+        intensity: devicePerformance.shouldUseLowPowerMode ? 'low' : 'medium' as const,
+        interval: 30000, 
+        palette: 'aurora' as const
+      };
+    }
+    
+    return {
+      intensity: devicePerformance.shouldUseLowPowerMode ? 'low' : 'medium' as const,
+      interval: 30000,
+      palette: 'aurora' as const
+    };
+  }, [isConnecting, isSearching, remoteStream, devicePerformance.shouldUseLowPowerMode]);
+
   return (
     <View style={homeScreenStyles.videoContainer}>
       <GestureDetector gesture={panGesture}>
-        <Animated.View style={[homeScreenStyles.mainVideoContainer, animatedCardStyle]}>
-          <LinearGradient
-            colors={['#667eea', '#764ba2']}
+        <Animated.View style={[homeScreenStyles.mainVideoContainer]}>
+          <FluidBackground
             style={homeScreenStyles.mainVideo}
+            interval={backgroundConfig.interval}
+            intensity={backgroundConfig.intensity as any}
+            palette={backgroundConfig.palette as any}
           >
             <View style={homeScreenStyles.videoFrame}>
-              {/* Background Effects */}
-              <FloatingParticles 
-                count={remoteStream ? devicePerformance.recommendedParticleCount / 2 : devicePerformance.recommendedParticleCount}
-                colors={['#667eea', '#764ba2', '#f093fb', '#f5576c']}
-                isActive={!remoteStream || isSearching || isConnecting}
-                lowPowerMode={devicePerformance.shouldUseLowPowerMode}
-              />
-              
+              {/* Background Effects - reduced when video is active */}
+              {/* {(!remoteStream || isSearching || isConnecting) && (
+                <FloatingParticles
+                  count={devicePerformance.recommendedParticleCount / (remoteStream ? 4 : 2)}
+                  colors={['#4facfe', '#00f2fe', '#43e97b', '#38f9d7']}
+                  isActive={!remoteStream || isSearching || isConnecting}
+                  lowPowerMode={devicePerformance.shouldUseLowPowerMode}
+                />
+              )} */}
+
               {/* Remote video stream or placeholder */}
               {remoteStream ? (
                 <RTCView
                   key={`remote-${remoteStream._id}`}
                   streamURL={remoteStream.toURL()}
                   style={[homeScreenStyles.videoBackground, {
-                    // Enhanced video quality settings
-                    backgroundColor: '#000000',
-                    borderRadius: 0,
+                    backgroundColor: 'transparent',
                   }]}
                   objectFit="cover"
                   zOrder={2}
                   mirror={false}
-                  // Enable hardware acceleration if available
-                  {...(Platform.OS === 'ios' ? {
+                  // Android-friendly configuration
+                  {...(Platform.OS === 'android' ? {
                     renderingMode: 'hardware',
-                    videoTrackId: remoteStream.getVideoTracks()[0]?.id,
-                  } : {})}
+                  } : {
+                    renderingMode: 'software', // iOS fallback
+                  })}
                 />
-              ) : (
-                <LinearGradient
-                  colors={['#667eea', '#764ba2', '#f093fb']}
-                  style={homeScreenStyles.videoBackground}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                />
-              )}
-
-              {/* Video Quality Indicator */}
-              {showVideoQualityIndicator && remoteStream && getCurrentVideoQuality && getNetworkStats && (
-                <VideoQualityIndicator
-                  currentQuality={getCurrentVideoQuality()}
-                  networkStats={getNetworkStats()}
-                  showNetworkStats={__DEV__}
-                />
-              )}
+              ) : null}
 
               {/* Connection status overlay */}
-              {(isConnecting || isSearching) && (
+              {(isConnecting || isSearching) && !remoteStream && (
                 <View style={homeScreenStyles.connectionOverlay}>
                   <ActivityIndicator size="large" color="#fff" />
                   <Text style={homeScreenStyles.connectionText}>
@@ -116,7 +128,7 @@ export const MainVideoArea: React.FC<MainVideoAreaProps> = ({
               )}
 
             </View>
-          </LinearGradient>
+          </FluidBackground>
         </Animated.View>
       </GestureDetector>
 

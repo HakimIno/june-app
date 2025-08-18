@@ -7,11 +7,11 @@ export const selfVideoStyles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    height: screenDimensions.isTablet ? screenDimensions.height * 0.45 : screenDimensions.height * 0.4,
+    height: responsiveSize(screenDimensions.height * 0.5),
   },
   selfVideo: {
     flex: 1,
-    borderRadius: responsiveSize(15),
+    borderRadius: responsiveSize(8),
     overflow: 'hidden',
     position: 'relative',
   },

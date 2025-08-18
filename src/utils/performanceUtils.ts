@@ -31,7 +31,7 @@ export const detectDevicePerformance = (): DevicePerformance => {
   
   return {
     isLowEnd,
-    recommendedParticleCount: isLowEnd ? 6 : isLargeScreen ? 20 : 12,
+    recommendedParticleCount: isLowEnd ? 15 : isLargeScreen ? 120 : 80, // เพิ่มจำนวนอนุภาค
     shouldUseLowPowerMode: isLowEnd,
   };
 };
@@ -94,10 +94,10 @@ export const BatteryOptimization = {
   getOptimalParticleCount: (baseCount: number, isLowPower: boolean, isVideoActive: boolean): number => {
     let optimizedCount = baseCount;
     
-    if (isLowPower) optimizedCount = Math.min(optimizedCount, 6);
-    if (isVideoActive) optimizedCount = Math.floor(optimizedCount * 0.6); // Reduce when video is playing
+    if (isLowPower) optimizedCount = Math.min(optimizedCount, 30); // เพิ่มจาก 6 เป็น 30
+    if (isVideoActive) optimizedCount = Math.floor(optimizedCount * 0.4); // ลดเหลือ 40% เมื่อมีวิดีโอ
     
-    return Math.max(optimizedCount, 3); // Always show at least a few particles
+    return Math.max(optimizedCount, 10); // แสดงอย่างน้อย 10 อนุภาค
   },
 
   // Suggested animation durations for battery saving

@@ -97,6 +97,11 @@ const HomeScreen = () => {
     }
   }, [signalingState?.isConnected, signalingState?.currentRoomId, isConnected, isConnecting, isSearching, findMatch]);
 
+
+  console.log('====================================');
+  console.log("remoteStream",remoteStream);
+  console.log('====================================');
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaView style={homeScreenStyles.container}>

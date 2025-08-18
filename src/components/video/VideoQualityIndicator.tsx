@@ -18,23 +18,7 @@ export const VideoQualityIndicator: React.FC<VideoQualityIndicatorProps> = ({
   networkStats,
   showNetworkStats = false,
 }) => {
-  const [qualityColor, setQualityColor] = useState('#4CAF50');
-
-  console.log("currentQuality",currentQuality);
-  
-  useEffect(() => {
-    switch (currentQuality) {
-      case 'high':
-        setQualityColor('#4CAF50'); // Green
-        break;
-      case 'medium':
-        setQualityColor('#FF9800'); // Orange
-        break;
-      case 'low':
-        setQualityColor('#F44336'); // Red
-        break;
-    }
-  }, [currentQuality]);
+ 
 
   const getQualityText = () => {
     switch (currentQuality) {
@@ -59,13 +43,6 @@ export const VideoQualityIndicator: React.FC<VideoQualityIndicatorProps> = ({
 
   return (
     <>
-      {/* Video Quality Indicator */}
-      <View style={homeScreenStyles.videoQualityIndicator}>
-        <Text style={[homeScreenStyles.videoQualityText, { color: qualityColor }]}>
-          {getQualityText()}
-        </Text>
-      </View>
-
       {/* Network Stats (Optional) */}
       {showNetworkStats && (
         <View style={homeScreenStyles.networkStatsContainer}>

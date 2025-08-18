@@ -19,24 +19,67 @@ class WebRTCService {
         isConnected: false,
         hasLocalStream: false,
         hasRemoteStream: false,
+        connectionRetries: 0,
+        lastProcessedAnswerKey: undefined,
     };
     private listeners: Map<string, Function[]> = new Map();
+    private offerSent: boolean = false;
+    private answerSent: boolean = false;
 
-    // STUN/TURN servers configuration
+    // STUN/TURN servers configuration with security
     private readonly config: WebRTCConfig = {
         iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' },
-            // เพิ่ม TURN server สำหรับการใช้งานจริง
-            // {
-            //   urls: 'turn:your-turn-server.com:3478',
-            //   username: 'username',
-            //   credential: 'password'
-            // }
+            // TURN servers only - no STUN for better connectivity
+            {
+                urls: 'turn:global.relay.metered.ca:80',
+                username: 'a5f0489b0b2f9fe3c17b9c0f',
+                credential: 'TBr6GE9/+t4xp1Gz'
+            },
+            {
+                urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+                username: 'a5f0489b0b2f9fe3c17b9c0f',
+                credential: 'TBr6GE9/+t4xp1Gz'
+            },
+            {
+                urls: 'turn:global.relay.metered.ca:443',
+                username: 'a5f0489b0b2f9fe3c17b9c0f',
+                credential: 'TBr6GE9/+t4xp1Gz'
+            },
+            {
+                urls: 'turn:global.relay.metered.ca:443?transport=tcp',
+                username: 'a5f0489b0b2f9fe3c17b9c0f',
+                credential: 'TBr6GE9/+t4xp1Gz'
+            },
+            // Alternative reliable servers
+            {
+                urls: 'turn:numb.viagenie.ca',
+                username: 'webrtc@live.com',
+                credential: 'muazkh'
+            },
+            {
+                urls: 'turn:turn.bistri.com:80',
+                username: 'homeo',
+                credential: 'homeo'
+            },
+            // Coturn public servers
+            {
+                urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
+                username: 'webrtc',
+                credential: 'webrtc'
+            },
+            // Xirsys free tier (if you have account)
+            {
+                urls: 'turns:global.xirsys.com:5349?transport=tcp',
+                username: 'free',
+                credential: 'free'
+            }
         ],
+        // Enhanced configuration for better connectivity
+        iceCandidatePoolSize: 10,
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+        // Force TURN relay for better NAT traversal
+        iceTransportPolicy: 'relay' as const, // Force TURN servers only - no STUN/host candidates
     };
 
     async initialize(): Promise<void> {
@@ -427,12 +470,31 @@ class WebRTCService {
         signalingService.on('user-left', this.handleUserLeft.bind(this));
     }
 
-    async createPeerConnection(): Promise<RTCPeerConnection> {
-        this.peerConnection = new RTCPeerConnection(this.config);
+    async createPeerConnection(useTurnOnly: boolean = false): Promise<RTCPeerConnection> {
+        const config = useTurnOnly ? this.getTurnOnlyConfig() : this.config;
+        console.log(`Creating peer connection with${useTurnOnly ? ' TURN-only' : ' TURN-relay'} config`);
+        console.log('🌍 Using ICE servers:', config.iceServers.map(server => ({
+            url: server.urls,
+            hasCredentials: !!(server.username && server.credential)
+        })));
+        this.peerConnection = new RTCPeerConnection(config);
 
         // Add local stream to peer connection
         if (this.localStream) {
+            console.log('📤 Adding local stream to peer connection:', {
+                streamId: this.localStream.id,
+                audioTracks: this.localStream.getAudioTracks().length,
+                videoTracks: this.localStream.getVideoTracks().length,
+                videoTrackStates: this.localStream.getVideoTracks().map((track: any) => ({
+                    id: track.id,
+                    enabled: track.enabled,
+                    readyState: track.readyState,
+                    muted: track.muted
+                }))
+            });
+            
             this.localStream.getTracks().forEach(track => {
+                console.log(`Adding ${track.kind} track:`, { id: track.id, enabled: track.enabled });
                 this.peerConnection?.addTrack(track, this.localStream!);
             });
         }
@@ -448,42 +510,122 @@ class WebRTCService {
 
         // Alternative way to handle remote tracks (more modern)
         (this.peerConnection as any).ontrack = (event: any) => {
-            console.log('Remote track received:', event);
+            console.log('🎥 Remote track received:', event);
+            
             if (event.streams && event.streams[0]) {
-                const stream = event.streams[0];
-                console.log('Remote stream from ontrack:', stream);
+              const stream = event.streams[0];
+              
+              // ✅ ตรวจสอบว่า stream มี tracks หรือไม่
+              const audioTracks = stream.getAudioTracks();
+              const videoTracks = stream.getVideoTracks();
+              
+              if (audioTracks.length === 0 && videoTracks.length === 0) {
+                console.warn('⚠️ Remote stream has no tracks');
+                return;
+              }
+              
+              console.log('📺 Remote stream details:', {
+                id: stream.id,
+                active: stream.active,
+                audioTracks: audioTracks.length,
+                videoTracks: videoTracks.length,
+                videoTrackStates: videoTracks.map(track => ({
+                  id: track.id,
+                  enabled: track.enabled,
+                  readyState: track.readyState,
+                  muted: track.muted
+                }))
+              });
+          
+              // ✅ เปิดใช้งาน audio tracks
+              audioTracks.forEach(track => {
+                track.enabled = true;
                 
-                // Enable remote audio tracks
-                const audioTracks = stream.getAudioTracks();
-                audioTracks.forEach((track: any) => {
-                    track.enabled = true;
-                    
-                    // Use native methods for React Native WebRTC
-                    if (track._setVolume) {
-                        track._setVolume(1.0);
-                    }
-                    
-                    if (track.setEnabled) {
-                        track.setEnabled(true);
-                    }
-                    
-                    console.log('Remote audio track enabled:', track.enabled);
-                    console.log('Remote audio track settings:', track.getSettings());
+                // Boost volume
+                if (track._setVolume) track._setVolume(1.0);
+                if (track.setVolume) track.setVolume(1.0);
+                
+                console.log('🔊 Audio track enabled:', { 
+                  id: track.id, 
+                  enabled: track.enabled 
                 });
+              });
+          
+              // ✅ เปิดใช้งาน video tracks
+              videoTracks.forEach(track => {
+                track.enabled = true;
                 
-                this.remoteStream = stream;
-                this.state.hasRemoteStream = true;
-                this.state.remoteStream = stream;
-                this.emit('remoteStream', stream);
+                // Force unmute if needed
+                if (track.muted && track.unmute) {
+                  track.unmute();
+                }
+                
+                console.log('📹 Video track enabled:', { 
+                  id: track.id, 
+                  enabled: track.enabled, 
+                  muted: track.muted, 
+                  readyState: track.readyState,
+                  settings: track.getSettings ? track.getSettings() : {}
+                });
+              });
+              
+              // ✅ สร้าง stream URL สำหรับแสดงผล
+              let streamURL = null;
+              try {
+                if (typeof stream.toURL === 'function') {
+                  streamURL = stream.toURL();
+                  console.log('✅ Stream URL created:', streamURL);
+                }
+              } catch (error) {
+                console.error('❌ Failed to create stream URL:', error);
+              }
+              
+              this.remoteStream = stream;
+              this.state.hasRemoteStream = true;
+              this.state.remoteStream = stream;
+              this.state.remoteStreamURL = streamURL; // ✅ เก็บ URL ใน state
+              
+              console.log('🎯 Remote stream set successfully:', {
+                streamId: stream.id,
+                streamURL: streamURL,
+                audioEnabled: audioTracks.length > 0 && audioTracks[0]?.enabled,
+                videoEnabled: videoTracks.length > 0 && videoTracks[0]?.enabled
+              });
+              
+              this.emit('remoteStream', stream);
             }
-        };
+          };
 
         // Handle ICE candidates
         (this.peerConnection as any).onicecandidate = (event: any) => {
             if (event.candidate) {
-                console.log('New ICE candidate:', event.candidate);
+                const candidate = event.candidate;
+                console.log('🧊 New ICE candidate:', {
+                    type: candidate.type || 'unknown',
+                    protocol: candidate.protocol,
+                    address: candidate.address || candidate.ip,
+                    port: candidate.port,
+                    priority: candidate.priority,
+                    candidateType: candidate.candidateType || 'unknown',
+                    foundation: candidate.foundation,
+                    component: candidate.component,
+                    relatedAddress: candidate.relatedAddress,
+                    relatedPort: candidate.relatedPort
+                });
+                
+                // Critical: Check if we're getting TURN candidates
+                if (candidate.candidateType === 'relay') {
+                    console.log('✅ TURN candidate found!', candidate.address);
+                } else if (candidate.candidateType === 'host') {
+                    console.warn('⚠️ Host candidate found - should not happen with relay-only policy');
+                } else if (candidate.candidateType === 'srflx') {
+                    console.warn('⚠️ STUN candidate found - should not happen with relay-only policy');
+                }
+                
                 // Send candidate through signaling service
                 signalingService.sendIceCandidate(event.candidate, this.getCurrentPeerId());
+            } else {
+                console.log('🧊 ICE gathering completed');
             }
         };
 
@@ -526,16 +668,73 @@ class WebRTCService {
             }
         };
 
-        // ICE connection state change handler
+        // ICE connection state change handler with enhanced debugging
         (this.peerConnection as any).oniceconnectionstatechange = () => {
             const iceState = this.peerConnection?.iceConnectionState;
-            console.log('ICE connection state changed:', iceState);
+            console.log('🔄 ICE connection state changed:', iceState);
             
             if (iceState === 'failed') {
-                console.warn('ICE connection failed, restarting...');
+                console.error('❌ ICE connection failed!');
+                this.state.isConnected = false;
+                this.state.isConnecting = false;
+                
+                // Log ICE candidates for debugging
+                this.debugIceCandidates();
+                
+                // Try restart first, then full reconnection
+                console.log('🔄 Attempting ICE restart...');
                 this.restartIce();
+                
+                // If ICE restart fails, try full reconnection after 5 seconds
+                setTimeout(() => {
+                    if (!this.state.isConnected) {
+                        console.log('🔄 ICE restart failed, attempting full reconnection...');
+                        this.attemptReconnection();
+                    }
+                }, 5000);
+                
             } else if (iceState === 'connected' || iceState === 'completed') {
-                console.log('ICE connection established successfully');
+                console.log('✅ ICE connection established successfully:', iceState);
+                this.state.isConnecting = false;
+                this.state.isConnected = true;
+                this.state.connectionRetries = 0; // Reset retry count on success
+                this.emit('connected', {});
+                
+                // Ensure UI knows about the connection
+                console.log('🎉 WebRTC connection successful! Remote stream ready.');
+                
+            } else if (iceState === 'disconnected') {
+                console.warn('⚠️ ICE connection disconnected');
+                this.state.isConnected = false;
+                this.emit('disconnected', {});
+                
+                // Try to recover connection after 3 seconds
+                setTimeout(() => {
+                    if (!this.state.isConnected) {
+                        console.log('🔄 Attempting reconnection after disconnect...');
+                        this.attemptReconnection();
+                    }
+                }, 3000);
+                
+            } else if (iceState === 'checking') {
+                console.log('🔍 ICE connection checking...');
+                this.state.isConnecting = true;
+                this.emit('connecting', {});
+                
+                // Set shorter timeout for TURN-only checking (8 seconds)
+                setTimeout(() => {
+                    const currentState = this.peerConnection?.iceConnectionState;
+                    if (currentState === 'checking') {
+                        console.error('⏰ ICE checking timeout after 8 seconds');
+                        console.log('🔄 TURN servers not responding, forcing restart...');
+                        this.handleConnectionFailure();
+                    }
+                }, 8000); // Reduced to 8 seconds for TURN-only mode
+                
+            } else if (iceState === 'new') {
+                console.log('🆕 ICE connection state: new');
+            } else {
+                console.log('🔄 ICE connection state:', iceState);
             }
         };
 
@@ -544,11 +743,34 @@ class WebRTCService {
 
     async createOffer(peerId: string): Promise<void> {
         try {
+            console.log('Starting createOffer for peer:', peerId);
+            
+            // Prevent sending offer multiple times
+            if (this.offerSent) {
+                console.warn('Offer already sent, ignoring duplicate request');
+                return;
+            }
+            
+            // Check if we already have a connection
+            if (this.state.isConnected) {
+                console.log('Already connected, skipping offer creation');
+                return;
+            }
+            
             this.currentPeerId = peerId;
             
+            // Update state to connecting
+            this.state.isConnecting = true;
+            this.state.isConnected = false;
+            this.emit('connecting', {});
+            
             if (!this.peerConnection) {
+                console.log('Creating new peer connection...');
                 await this.createPeerConnection();
             }
+
+            console.log('Peer connection state:', this.peerConnection?.connectionState);
+            console.log('Local stream available:', !!this.localStream);
 
             const offer = await this.peerConnection!.createOffer({
                 offerToReceiveAudio: true,
@@ -557,82 +779,165 @@ class WebRTCService {
                 iceRestart: false,
             });
 
+            console.log('Offer created:', offer.type);
             await this.peerConnection!.setLocalDescription(offer);
+            console.log('Local description set');
 
             // Send offer through signaling service
+            console.log('Sending offer to peer:', peerId);
             signalingService.sendOffer(offer, peerId);
+            this.offerSent = true;
 
-            console.log('Offer created and sent to:', peerId);
+            console.log('Offer created and sent successfully to:', peerId);
         } catch (error) {
             console.error('Failed to create offer:', error);
             this.state.error = error instanceof Error ? error.message : 'Failed to create offer';
+            this.state.isConnecting = false;
+            this.emit('connectionError', error);
+            throw error; // Re-throw to allow retry logic
         }
     }
 
-    private async handleOffer(data: any): Promise<void> {
+    async handleOffer(data: any): Promise<void> {
         try {
-            console.log('Handling offer:', data);
+          // ✅ เพิ่มการตรวจสอบ state ที่เข้มงวดขึ้น
+          if (this.answerSent || this.state.isConnected) {
+            console.log('🚫 Skipping offer - already processed or connected');
+            return;
+          }
+          
+          if (this.peerConnection && this.peerConnection.signalingState !== 'stable') {
+            console.warn('⚠️ Peer connection not in stable state:', this.peerConnection.signalingState);
+            return;
+          }
+          
+          const offer = data.offer || data;
+          const from = data.from;
+          
+          if (!offer?.type || !offer?.sdp) {
+            console.error('❌ Invalid offer data:', data);
+            return;
+          }
+          
+          this.currentPeerId = from;
+          
+          if (!this.peerConnection) {
+            await this.createPeerConnection();
+          }
+      
+          // ✅ ตรวจสอบ signaling state ก่อนตั้งค่า remote description
+          console.log('📥 Setting remote description, current state:', this.peerConnection!.signalingState);
+          
+          await this.peerConnection!.setRemoteDescription(new RTCSessionDescription({
+            type: offer.type,
+            sdp: offer.sdp,
+          }));
+          
+          console.log('✅ Remote description set, new state:', this.peerConnection!.signalingState);
+      
+          // ✅ ตรวจสอบว่ายังอยู่ใน state ที่ถูกต้อง
+          if (this.peerConnection!.signalingState !== 'have-remote-offer') {
+            console.warn('⚠️ Unexpected state after setting remote description');
+            return;
+          }
+      
+          if (this.answerSent) {
+            console.warn('🚫 Answer already sent, skipping');
+            return;
+          }
+      
+          // ✅ สร้าง answer พร้อม constraints ที่เหมาะสม
+          const answer = await this.peerConnection!.createAnswer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
+            voiceActivityDetection: true
+          });
+          
+          await this.peerConnection!.setLocalDescription(answer);
+          
+          // ✅ ส่ง answer ผ่าน signaling service
+          signalingService.sendAnswer(answer, from);
+          this.answerSent = true;
+      
+          console.log('✅ Answer created and sent successfully to:', from);
+        } catch (error) {
+          console.error('❌ Failed to handle offer:', error);
+          this.emit('connectionError', error);
+        }
+      }
+
+    async handleAnswer(data: any): Promise<void> {
+        try {
+            console.log('Handling answer:', data);
             
-            // Extract offer and from from data
-            const offer = data.offer || data;
-            const from = data.from;
-            
-            if (!offer || !offer.type || !offer.sdp) {
-                console.error('Invalid offer data:', data);
+            // Skip processing if we're already connected
+            if (this.state.isConnected) {
+                console.log('🚫 Skipping answer - already connected');
                 return;
             }
             
-            this.currentPeerId = from;
-            
+            // Check peer connection state before processing answer
             if (!this.peerConnection) {
-                await this.createPeerConnection();
+                console.warn('⚠️ No peer connection available for answer');
+                return;
             }
-
-            await this.peerConnection!.setRemoteDescription(new RTCSessionDescription({
-                type: offer.type,
-                sdp: offer.sdp,
-            }));
-
-            const answer = await this.peerConnection!.createAnswer();
-            await this.peerConnection!.setLocalDescription(answer);
-
-            // Send answer through signaling service
-            signalingService.sendAnswer(answer, from);
-
-            console.log('Answer created and sent to:', from);
-        } catch (error) {
-            console.error('Failed to handle offer:', error);
-        }
-    }
-
-    private async handleAnswer(data: any): Promise<void> {
-        try {
-            console.log('Handling answer:', data);
+            
+            const currentState = this.peerConnection.signalingState;
+            console.log('Current signaling state before processing answer:', currentState);
+            
+            // Only process answer if we're in the right state
+            if (currentState === 'stable') {
+                console.warn('🚫 Peer connection already stable, ignoring answer');
+                return;
+            }
+            
+            if (currentState !== 'have-local-offer' && currentState !== 'have-remote-pranswer') {
+                console.warn(`🚫 Ignoring answer - wrong state: ${currentState}`);
+                return;
+            }
             
             // Extract answer and from from data
             const answer = data.answer || data;
             const from = data.from;
             
             if (!answer || !answer.type || !answer.sdp) {
-                console.error('Invalid answer data:', data);
+                console.error('❌ Invalid answer data:', data);
                 return;
             }
+            
+            // Check for duplicate answer
+            const answerKey = `${from}_${answer.sdp.substring(0, 50)}`;
+            if (this.state.lastProcessedAnswerKey === answerKey) {
+                console.warn('🚫 Duplicate answer detected, ignoring');
+                return;
+            }
+            
+            this.state.lastProcessedAnswerKey = answerKey;
             
             if (this.peerConnection) {
                 await this.peerConnection.setRemoteDescription(new RTCSessionDescription({
                     type: answer.type,
                     sdp: answer.sdp,
                 }));
-                console.log('Answer received and set from:', from);
+                console.log('✅ Answer received and set from:', from);
             }
         } catch (error) {
-            console.error('Failed to handle answer:', error);
+            console.error('❌ Failed to handle answer:', error);
         }
     }
 
-    private async handleIceCandidate(data: any): Promise<void> {
+    async handleIceCandidate(data: any): Promise<void> {
         try {
-            console.log('Handling ICE candidate:', data);
+            // Check if peer connection is ready
+            if (!this.peerConnection) {
+                return;
+            }
+            
+            // Check if remote description is set
+            if (!this.peerConnection.remoteDescription) {
+                // ICE candidate received too early, ignore
+                return;
+            }
             
             // Extract candidate and from from data
             let candidate;
@@ -655,22 +960,90 @@ class WebRTCService {
             }
             
             if (!candidate || !candidate.candidate) {
-                console.error('Invalid ICE candidate data:', data);
+                console.error('Invalid ICE candidate data');
+                return;
+            }
+            
+            // Security: Validate ICE candidate format
+            if (!this.isValidIceCandidate(candidate)) {
+                console.warn('Invalid ICE candidate format, rejecting');
                 return;
             }
             
             // Validate that at least one of sdpMLineIndex or sdpMid is provided
             if (candidate.sdpMLineIndex === null && candidate.sdpMLineIndex !== 0 && !candidate.sdpMid) {
-                console.warn('ICE candidate missing both sdpMLineIndex and sdpMid, skipping:', candidate);
+                console.warn('ICE candidate missing both sdpMLineIndex and sdpMid, skipping');
                 return;
             }
             
             if (this.peerConnection) {
                 await this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                console.log('ICE candidate added successfully from:', from);
+                // ICE candidate added successfully
             }
         } catch (error) {
-            console.error('Failed to add ICE candidate:', error, 'Data:', data);
+            console.error('Failed to add ICE candidate:', error);
+        }
+    }
+
+    // Security: Validate ICE candidate
+    private isValidIceCandidate(candidate: any): boolean {
+        try {
+            // Check required fields
+            if (!candidate.candidate || typeof candidate.candidate !== 'string') {
+                return false;
+            }
+            
+            // Basic format validation for ICE candidate string
+            const candidateString = candidate.candidate;
+            
+            // Should contain essential ICE candidate parts
+            if (!candidateString.includes('candidate:') || 
+                !candidateString.includes('typ ')) {
+                return false;
+            }
+            
+            // Check for suspicious content
+            const suspiciousPatterns = [
+                /<script/i,
+                /javascript:/i,
+                /data:/i,
+                /vbscript:/i
+            ];
+            
+            for (const pattern of suspiciousPatterns) {
+                if (pattern.test(candidateString)) {
+                    console.warn('Suspicious content detected in ICE candidate');
+                    return false;
+                }
+            }
+            
+            // Validate IP address format (basic check)
+            const ipMatch = candidateString.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
+            if (ipMatch) {
+                const ip = ipMatch[1];
+                const parts = ip.split('.').map(Number);
+                
+                // Check for valid IP range
+                if (parts.some((part: number) => part > 255 || part < 0)) {
+                    return false;
+                }
+                
+                // Block private IP ranges in production for security
+                if (!__DEV__) {
+                    // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                    if ((parts[0] === 10) ||
+                        (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+                        (parts[0] === 192 && parts[1] === 168)) {
+                        console.warn('Private IP address detected in production');
+                        return false;
+                    }
+                }
+            }
+            
+            return true;
+        } catch (error) {
+            console.error('Error validating ICE candidate:', error);
+            return false;
         }
     }
 
@@ -746,16 +1119,12 @@ class WebRTCService {
 
     // Boost audio volume for both local and remote streams
     boostAudioVolume(): void {
-        try {
-            console.log('Attempting to boost audio volume...');
-            
+        try {            
             // Boost local stream audio
             if (this.localStream) {
                 const audioTracks = this.localStream.getAudioTracks();
-                console.log(`Local audio tracks found: ${audioTracks.length}`);
                 
                 audioTracks.forEach((track, index) => {
-                    console.log(`Processing local audio track ${index}:`, track.enabled);
                     track.enabled = true;
                     
                     // Try different volume setting methods
@@ -764,7 +1133,7 @@ class WebRTCService {
                     // Method 1: _setVolume
                     if (trackAny._setVolume) {
                         trackAny._setVolume(1.0);
-                        console.log('Used _setVolume for local track');
+                        // Volume set
                     }
                     
                     // Method 2: setVolume
@@ -776,7 +1145,7 @@ class WebRTCService {
                     // Method 3: volume property
                     try {
                         trackAny.volume = 1.0;
-                        console.log('Set volume property for local track');
+                        // Volume property set
                     } catch (e) {
                         console.log('Volume property not available for local track');
                     }
@@ -805,7 +1174,7 @@ class WebRTCService {
                     // Method 1: _setVolume
                     if (trackAny._setVolume) {
                         trackAny._setVolume(1.0);
-                        console.log('Used _setVolume for remote track');
+                        // Remote volume set
                     }
                     
                     // Method 2: setVolume
@@ -817,7 +1186,7 @@ class WebRTCService {
                     // Method 3: volume property
                     try {
                         trackAny.volume = 1.0;
-                        console.log('Set volume property for remote track');
+                        // Remote volume property set
                     } catch (e) {
                         console.log('Volume property not available for remote track');
                     }
@@ -831,7 +1200,7 @@ class WebRTCService {
                 console.log('No remote stream available');
             }
             
-            console.log('Audio boost operation completed');
+            // Audio boost completed
         } catch (error) {
             console.error('Failed to boost audio volume:', error);
         }
@@ -848,10 +1217,72 @@ class WebRTCService {
         }
     }
 
+    // Debug ICE candidates for troubleshooting
+    private async debugIceCandidates(): Promise<void> {
+        if (!this.peerConnection) return;
+        
+        try {
+            const stats = await this.peerConnection.getStats();
+            console.log('🔍 Debug ICE Candidates:');
+            
+            stats.forEach((report: any) => {
+                if (report.type === 'local-candidate') {
+                    console.log('📤 Local candidate:', {
+                        candidateType: report.candidateType,
+                        ip: report.ip,
+                        port: report.port,
+                        protocol: report.protocol,
+                        url: report.url
+                    });
+                } else if (report.type === 'remote-candidate') {
+                    console.log('📥 Remote candidate:', {
+                        candidateType: report.candidateType,
+                        ip: report.ip,
+                        port: report.port,
+                        protocol: report.protocol
+                    });
+                } else if (report.type === 'candidate-pair') {
+                    console.log('🔗 Candidate pair:', {
+                        state: report.state,
+                        nominated: report.nominated,
+                        writable: report.writable,
+                        readable: report.readable
+                    });
+                }
+            });
+        } catch (error) {
+            console.error('Failed to debug ICE candidates:', error);
+        }
+    }
+
+    // Create TURN-only configuration for fallback
+    private getTurnOnlyConfig(): WebRTCConfig {
+        return {
+            ...this.config,
+            iceTransportPolicy: 'relay' as const, // Force TURN servers only
+            iceServers: [
+                // Use only working TURN servers for backup
+                {
+                    urls: 'turn:global.relay.metered.ca:80',
+                    username: 'a5f0489b0b2f9fe3c17b9c0f',
+                    credential: 'TBr6GE9/+t4xp1Gz'
+                },
+                {
+                    urls: 'turn:global.relay.metered.ca:443',
+                    username: 'a5f0489b0b2f9fe3c17b9c0f',
+                    credential: 'TBr6GE9/+t4xp1Gz'
+                }
+            ]
+        };
+    }
+
     // Handle connection failure
     private async handleConnectionFailure(): Promise<void> {
         try {
-            console.log('Attempting to restart connection...');
+            // Increment retry count
+            this.state.connectionRetries = (this.state.connectionRetries || 0) + 1;
+            
+            console.log(`Attempting to restart connection (attempt ${this.state.connectionRetries})...`);
             
             // Close current peer connection
             if (this.peerConnection) {
@@ -860,10 +1291,16 @@ class WebRTCService {
             }
             
             // Wait a bit before restart
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 2000));
             
-            // Recreate peer connection
-            await this.createPeerConnection();
+            // Use TURN-only after first failure
+            const useTurnOnly = this.state.connectionRetries > 1;
+            if (useTurnOnly) {
+                console.log('🚀 Using TURN-only configuration due to previous failures');
+            }
+            
+            // Recreate peer connection with potentially TURN-only config
+            await this.createPeerConnection(useTurnOnly);
             
             // Notify about reconnection attempt
             this.emit('reconnecting', true);
@@ -954,6 +1391,39 @@ class WebRTCService {
         }
     }
 
+    // Attempt connection recovery
+    private async attemptReconnection(): Promise<void> {
+        if (this.state.isConnected || this.state.isConnecting) {
+            console.log('Already connected or connecting, skipping reconnection');
+            return;
+        }
+
+        console.log('Attempting connection recovery...');
+        try {
+            // Reset connection flags
+            this.offerSent = false;
+            this.answerSent = false;
+            
+            // Close existing connection
+            if (this.peerConnection) {
+                this.peerConnection.close();
+                this.peerConnection = null;
+            }
+            
+            // Wait a bit before creating new connection
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Create new peer connection
+            await this.createPeerConnection();
+            
+            // Notify that we're ready for new signaling
+            this.emit('readyForNewConnection', {});
+            
+        } catch (error) {
+            console.error('Connection recovery failed:', error);
+        }
+    }
+
     // Restart ICE connection
     private async restartIce(): Promise<void> {
         try {
@@ -1027,6 +1497,35 @@ class WebRTCService {
         return { ...this.state };
     }
 
+    async cleanup(): Promise<void> {
+        // Close peer connection
+        if (this.peerConnection) {
+            this.peerConnection.close();
+            this.peerConnection = null;
+        }
+        
+        // Stop local stream tracks but keep stream for reuse
+        if (this.localStream) {
+            // Don't stop tracks, just clear reference
+            this.localStream = null;
+        }
+        
+        // Clear remote stream
+        this.remoteStream = null;
+        
+        // Reset state
+        this.state = {
+            isConnecting: false,
+            isConnected: false,
+            hasLocalStream: false,
+            hasRemoteStream: false,
+        };
+        
+        this.currentPeerId = '';
+        this.offerSent = false;
+        this.answerSent = false;
+    }
+
     getLocalStream(): MediaStream | null {
         return this.localStream;
     }
@@ -1047,3 +1546,4 @@ class WebRTCService {
 // Singleton instance
 export const webRTCService = new WebRTCService();
 export default WebRTCService;
+

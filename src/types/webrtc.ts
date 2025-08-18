@@ -2,6 +2,10 @@ import { MediaStream } from 'react-native-webrtc';
 
 export interface WebRTCConfig {
   iceServers: RTCIceServer[];
+  iceCandidatePoolSize?: number;
+  bundlePolicy?: RTCBundlePolicy;
+  rtcpMuxPolicy?: RTCRtcpMuxPolicy;
+  iceTransportPolicy?: RTCIceTransportPolicy;
 }
 
 export interface SignalingMessage {
@@ -36,11 +40,14 @@ export interface WebRTCState {
   remoteStream?: MediaStream;
   currentSession?: CallSession;
   error?: string;
+  lastProcessedAnswerKey?: string;
+  connectionRetries?: number;
 }
 
 export interface SignalingState {
   isConnected: boolean;
   isSearching: boolean;
+  currentlySearching?: boolean;
   currentRoomId?: string;
   error?: string;
 }

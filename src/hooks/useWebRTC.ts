@@ -164,35 +164,84 @@ export const useWebRTC = () => {
     };
 
     const handleRemoteStream = (stream: MediaStream) => {
-      console.log('Remote stream received in hook');
-      
-      // Apply audio processing for better quality
+      console.log('🎥 Remote stream received:', {
+        streamId: stream.id,
+        audioTracks: stream.getAudioTracks().length,
+        videoTracks: stream.getVideoTracks().length,
+        hasToURL: typeof stream.toURL === 'function'
+      });
+    
+      // ✅ สร้าง URL สำหรับแสดงผล
+      let streamURL = null;
+      try {
+        if (typeof stream.toURL === 'function') {
+          streamURL = stream.toURL();
+          console.log('✅ Remote stream URL created:', streamURL);
+        } else {
+          console.warn('⚠️ stream.toURL() not available');
+        }
+      } catch (error) {
+        console.error('❌ Failed to create stream URL:', error);
+      }
+    
+      // ✅ เปิดใช้งาน remote tracks ทั้งหมด
       const audioTracks = stream.getAudioTracks();
-      audioTracks.forEach(track => {
-        console.log('Remote audio track configured:', track.getSettings());
+      const videoTracks = stream.getVideoTracks();
+      
+      audioTracks.forEach((track, index) => {
+        track.enabled = true;
+        console.log(`🔊 Remote audio track ${index} enabled:`, {
+          id: track.id,
+          enabled: track.enabled,
+          readyState: track.readyState
+        });
+        
+        // Boost volume for remote audio
+        if (track._setVolume) track._setVolume(1.0);
+        if (track.setVolume) track.setVolume(1.0);
       });
       
-      // Auto-boost audio volume when remote stream arrives
+      videoTracks.forEach((track, index) => {
+        track.enabled = true;
+        console.log(`📹 Remote video track ${index} enabled:`, {
+          id: track.id,
+          enabled: track.enabled,
+          readyState: track.readyState,
+          muted: track.muted,
+          settings: track.getSettings ? track.getSettings() : {}
+        });
+        
+        // Force enable และ unmute
+        if (track.setEnabled) track.setEnabled(true);
+        if (track.muted && track.unmute) track.unmute();
+      });
+    
+      // ✅ Auto-boost audio volume หลังจาก remote stream พร้อม
       setTimeout(() => {
-        console.log('Auto-boosting audio volume...');
-        console.log('Remote stream audio tracks:', stream.getAudioTracks().length);
         webRTCService.boostAudioVolume();
       }, 1000);
       
-      // Important: Don't override local stream state
+      // ✅ อัพเดท state พร้อม URL
       setRemoteStream(stream);
       setWebRTCState(prev => ({ 
         ...prev, 
         hasRemoteStream: true, 
         remoteStream: stream,
-        // Preserve local stream state
+        remoteStreamURL: streamURL, // ✅ เพิ่ม URL ใน state
         hasLocalStream: prev.hasLocalStream,
         localStream: prev.localStream
       }));
     };
 
     const handleConnected = () => {
+      console.log('🎉 WebRTC connection established, updating UI state');
       setWebRTCState(prev => ({ ...prev, isConnected: true, isConnecting: false }));
+      
+      // Also ensure signaling state shows not searching when connected
+      setSignalingState(prev => ({
+        ...prev,
+        isSearching: false
+      }));
     };
 
     const handleConnecting = () => {
@@ -278,32 +327,85 @@ export const useWebRTC = () => {
     };
 
     const handleMatchFound = async (data: { roomId: string; peerId: string }) => {
-      console.log('Match found:', data);
+      console.log('❗ DEPRECATED: handleMatchFound - should use handleRoomJoined instead');
+      // This method is deprecated in favor of handleRoomJoined
       setSignalingState(prev => ({ 
         ...prev, 
         isSearching: false, 
         currentRoomId: data.roomId 
       }));
+    };
+
+    const handleRoomJoined = async (data: { 
+      roomId: string; 
+      partners: any; 
+      userCount: number; 
+      maxUsers: number; 
+      roomType: string 
+    }) => {
+      console.log('🎉 Room joined:', data);
+      console.log('Current WebRTC state before room join:', webRTCService.getState());
       
-      // Use socket ID to determine who should initiate offer (alphabetically smaller ID goes first)
+      setSignalingState(prev => {
+        const newState = {
+          ...prev, 
+          isSearching: false, // 🎯 KEY FIX: Stop showing "กำลังหาเพื่อนใหม่"
+          currentRoomId: data.roomId 
+        };
+        console.log('🔄 SignalingState updated after room-joined:', newState);
+        return newState;
+      });
+      
+      // Get partner info from the room data
+      const partnerList = Object.values(data.partners || {}) as any[];
+      if (partnerList.length === 0) {
+        console.error('No partners found in room data');
+        return;
+      }
+      
+      const partner = partnerList[0]; // Get first partner
+      const peerId = partner.socketId;
+      
+      // Use consistent logic to determine who should initiate offer
       const mySocketId = signalingService.getSocketId();
-      const shouldCreateOffer = mySocketId && mySocketId < data.peerId;
+      console.log('My Socket ID:', mySocketId, 'Partner Socket ID:', peerId);
+      
+      if (!mySocketId) {
+        console.error('No socket ID available, cannot proceed with room join');
+        return;
+      }
+      
+      const shouldCreateOffer = mySocketId < peerId;
+      console.log('Should create offer:', shouldCreateOffer);
       
       if (shouldCreateOffer) {
-        // Add a small delay to prevent race condition
+        console.log('🚀 I will create offer for partner:', peerId);
+        // Add a delay to ensure both sides are ready
         setTimeout(async () => {
           try {
             const currentState = webRTCService.getState();
+            console.log('WebRTC state before creating offer:', currentState);
+            
             if (!currentState.isConnected && !currentState.isConnecting) {
-              console.log('Creating offer for peer:', data.peerId);
-              await webRTCService.createOffer(data.peerId);
+              console.log('Creating offer for partner:', peerId);
+              await webRTCService.createOffer(peerId);
+              console.log('✅ Offer created successfully');
+            } else {
+              console.log('Already connected or connecting, skipping offer creation');
             }
           } catch (error) {
-            console.error('Failed to create offer:', error);
+            console.error('❌ Failed to create offer:', error);
           }
-        }, 100);
+        }, 1000); // 1 second delay for stability
       } else {
-        console.log('Waiting for offer from peer:', data.peerId);
+        console.log('⏳ Waiting for offer from partner:', peerId);
+        // Set a timeout to detect if offer never arrives
+        setTimeout(() => {
+          const currentState = webRTCService.getState();
+          if (!currentState.isConnected && !currentState.isConnecting) {
+            console.warn('⚠️ No offer received after 15 seconds, connection may have failed');
+          }
+        }, 15000);
       }
     };
 
@@ -334,8 +436,25 @@ export const useWebRTC = () => {
     signalingService.on('disconnected', handleSignalingDisconnected);
     signalingService.on('search-started', handleSearchStarted);
     signalingService.on('match-found', handleMatchFound);
+    signalingService.on('room-joined', handleRoomJoined); // 🎯 KEY FIX: Add room-joined handler
     signalingService.on('left-room', handleLeftRoom);
     signalingService.on('no-match', handleNoMatch);
+    
+    // Register WebRTC signaling listeners
+    signalingService.on('offer', (data: any) => {
+      console.log('Received offer via signaling:', data);
+      webRTCService.handleOffer(data);
+    });
+    
+    signalingService.on('answer', (data: any) => {
+      console.log('Received answer via signaling:', data);
+      webRTCService.handleAnswer(data);
+    });
+    
+    signalingService.on('ice-candidate', (data: any) => {
+      console.log('Received ICE candidate via signaling:', data);
+      webRTCService.handleIceCandidate(data);
+    });
 
     // Cleanup function
     return () => {
@@ -357,8 +476,14 @@ export const useWebRTC = () => {
       signalingService.off('disconnected', handleSignalingDisconnected);
       signalingService.off('search-started', handleSearchStarted);
       signalingService.off('match-found', handleMatchFound);
+      signalingService.off('room-joined', handleRoomJoined); // 🎯 KEY FIX: Remove room-joined handler
       signalingService.off('left-room', handleLeftRoom);
       signalingService.off('no-match', handleNoMatch);
+      
+      // Remove WebRTC signaling listeners  
+      signalingService.off('offer', () => {});
+      signalingService.off('answer', () => {});
+      signalingService.off('ice-candidate', () => {});
     };
   }, []);
 

@@ -12,17 +12,10 @@ export const homeScreenStyles = StyleSheet.create({
   },
   mainVideoContainer: {
     flex: 1,
-    borderRadius: responsiveSize(24),
-    overflow: 'hidden',
-    shadowColor: '#667eea',
-    shadowOffset: { width: 0, height: responsiveSize(12) },
-    shadowOpacity: 0.4,
-    shadowRadius: responsiveSize(24),
-    elevation: 15,
   },
   mainVideo: {
     flex: 1,
-    borderRadius: responsiveSize(12),
+    borderRadius: responsiveSize(8),
     position: 'relative',
   },
   videoFrame: {
@@ -35,16 +28,16 @@ export const homeScreenStyles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: screenDimensions.height * 0.6,
-    backgroundColor: '#000000',
-    ...(Platform.OS === 'ios' ? {
-      shouldRasterizeIOS: true,
-      rasterizationScale: 2,
-      drawingCache: true,
-    } : {
-      renderToHardwareTextureAndroid: true,
-      needsOffscreenAlphaCompositing: false,
-    }),
+    height: responsiveSize(screenDimensions.height * 0.5),
+    // backgroundColor: '#000000',
+    // ...(Platform.OS === 'ios' ? {
+    //   shouldRasterizeIOS: true,
+    //   rasterizationScale: 2,
+    //   drawingCache: true,
+    // } : {
+    //   renderToHardwareTextureAndroid: true,
+    //   needsOffscreenAlphaCompositing: false,
+    // }),
   },
   interestsContainer: {
     position: 'absolute',
@@ -171,7 +164,7 @@ export const homeScreenStyles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    bottom: responsiveSize(150),
+    bottom: responsiveSize(screenDimensions.height * 0.45),
     backgroundColor: 'rgba(0,0,0,0.1)',
     justifyContent: 'center',
     alignItems: 'center',

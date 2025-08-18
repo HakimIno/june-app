@@ -1,8 +1,11 @@
 import { SignalingMessage, SignalingState, UserSession } from '../types/webrtc';
+import { ReactNativeCrypto } from '../utils/cryptoUtils';
 
 class SignalingService {
   private socket: WebSocket | null = null;
   private socketId: string | null = null;
+  private sessionToken: string | null = null;
+  private encryptionKey: string | null = null;
   private state: SignalingState = {
     isConnected: false,
     isSearching: false,
@@ -11,16 +14,100 @@ class SignalingService {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  
+  // Rate limiting
+  private lastMessageTime = 0;
+  private messageCount = 0;
+  private readonly rateLimitWindow = 1000; // 1 second
+  private readonly maxMessagesPerWindow = 10;
 
-  // Production server หรือ development server URL
+  // Production server หรือ development server URL - ใช้ WSS สำหรับ production
   private readonly serverUrl = __DEV__ 
-    ? 'ws://192.168.95.82:3001/ws' 
+    ? 'ws://192.168.214.21:3001/ws' 
     : 'wss://your-production-server.com/ws';
 
-  connect(userSession: UserSession): Promise<void> {
-    return new Promise((resolve, reject) => {
+  // Security utilities - React Native compatible
+  private generateSessionToken(): string {
+    return ReactNativeCrypto.generateSecureToken(32);
+  }
+
+  private async generateEncryptionKey(): Promise<string> {
+    return ReactNativeCrypto.generateEncryptionKey();
+  }
+
+  private async encryptMessage(message: string): Promise<string> {
+    // Skip encryption in development mode
+    if (__DEV__) {
+      return message;
+    }
+    
+    if (!this.encryptionKey) return message;
+    
+    try {
+      return await ReactNativeCrypto.encryptMessage(message, this.encryptionKey);
+    } catch (error) {
+      console.error('Encryption failed:', error);
+      return message; // Fallback to unencrypted
+    }
+  }
+
+  private async decryptMessage(encryptedMessage: string): Promise<string> {
+    // Skip decryption in development mode
+    if (__DEV__) {
+      return encryptedMessage;
+    }
+    
+    if (!this.encryptionKey) return encryptedMessage;
+    
+    try {
+      return await ReactNativeCrypto.decryptMessage(encryptedMessage, this.encryptionKey);
+    } catch (error) {
+      console.error('Decryption failed:', error);
+      return encryptedMessage; // Fallback to encrypted
+    }
+  }
+
+  private isRateLimited(): boolean {
+    const now = Date.now();
+    
+    if (now - this.lastMessageTime > this.rateLimitWindow) {
+      this.messageCount = 0;
+      this.lastMessageTime = now;
+    }
+    
+    this.messageCount++;
+    return this.messageCount > this.maxMessagesPerWindow;
+  }
+
+  private sanitizeInput(input: any): any {
+    if (typeof input === 'string') {
+      // Remove potentially dangerous characters
+      return input.replace(/[<>\"'&]/g, '');
+    }
+    if (typeof input === 'object' && input !== null) {
+      const sanitized: any = {};
+      for (const [key, value] of Object.entries(input)) {
+        // Only allow safe property names
+        if (/^[a-zA-Z0-9_]+$/.test(key)) {
+          sanitized[key] = this.sanitizeInput(value);
+        }
+      }
+      return sanitized;
+    }
+    return input;
+  }
+
+  async connect(userSession: UserSession): Promise<void> {
+    return new Promise(async (resolve, reject) => {
       try {
-        console.log('Connecting to WebSocket server:', this.serverUrl);
+        // Generate security tokens
+        this.sessionToken = this.generateSessionToken();
+        this.encryptionKey = await this.generateEncryptionKey();
+        
+        // Sanitize user session
+        const sanitizedSession = this.sanitizeInput(userSession);
+        
+        console.log('Connecting to WebSocket server:', this.serverUrl.replace(/:\d+/, ':****')); // Hide port in logs
         
         this.socket = new WebSocket(this.serverUrl);
 
@@ -30,19 +117,28 @@ class SignalingService {
           this.reconnectAttempts = 0;
           this.emit('connected', { isConnected: true });
           
-          // Register user session
+          // Register user session with security token
           this.sendMessage({
             type: 'register-user',
-            data: { userSession }
+            data: { 
+              userSession: sanitizedSession,
+              sessionToken: this.sessionToken,
+              timestamp: Date.now()
+            }
           });
           
           resolve();
         };
 
-        this.socket.onmessage = (event) => {
+        this.socket.onmessage = async (event) => {
           try {
-            const message = JSON.parse(event.data);
-            this.handleIncomingMessage(message);
+            // Decrypt message if encryption is enabled
+            const decryptedData = await this.decryptMessage(event.data);
+            const message = JSON.parse(decryptedData);
+            
+            // Sanitize incoming message
+            const sanitizedMessage = this.sanitizeInput(message);
+            this.handleIncomingMessage(sanitizedMessage);
           } catch (error) {
             console.error('Failed to parse message:', error);
           }
@@ -72,30 +168,54 @@ class SignalingService {
   }
 
   private handleIncomingMessage(message: any): void {
-    const { type, data } = message;
+    const { type, data, ...messageData } = message;
     
-    console.log('Received message:', type, data);
+    console.log('Received message:', type, data || messageData);
 
     switch (type) {
       case 'connect':
-        this.socketId = data?.sid || null;
+        // Handle both nested data format and direct message format
+        const connectData = data || messageData;
+        this.socketId = connectData?.socketId || connectData?.sid || null;
         console.log('Connected with socket ID:', this.socketId);
         break;
         
       case 'registration-success':
-        console.log('Registration successful:', data);
-        this.emit('registration-success', data);
+        const regData = data || messageData;
+        console.log('Registration successful:', regData);
+        // Update socket ID from registration response as backup
+        if (regData?.socketId && !this.socketId) {
+          this.socketId = regData.socketId;
+          console.log('Socket ID updated from registration:', this.socketId);
+        }
+        this.emit('registration-success', regData);
         break;
         
       case 'match-found':
-        console.log('Match found:', data);
-        this.state.currentRoomId = data.roomId;
-        this.emit('match-found', data);
+        const matchData = data || messageData;
+        console.log('Match found:', matchData);
+        this.state.currentRoomId = matchData.roomId;
+        this.emit('match-found', matchData);
+        break;
+
+      case 'room-joined':
+        const roomData = data || messageData;
+        console.log('Room joined:', roomData);
+        this.state.currentRoomId = roomData.roomId;
+        this.state.currentlySearching = false;
+        this.emit('room-joined', roomData);
+        break;
+
+      case 'user-left':
+        const leftData = data || messageData;
+        console.log('User left room:', leftData);
+        this.emit('user-left', leftData);
         break;
         
       case 'search-started':
-        console.log('Search started:', data);
-        this.emit('search-started', data);
+        const searchData = data || messageData;
+        console.log('Search started:', searchData);
+        this.emit('search-started', searchData);
         break;
         
       case 'no-match':
@@ -104,28 +224,29 @@ class SignalingService {
         break;
         
       case 'room-error':
-        console.error('Room error:', data);
-        this.emit('room-error', data);
+        const errorData = data || messageData;
+        console.error('Room error:', errorData);
+        this.emit('room-error', errorData);
         break;
         
       case 'offer':
-        this.emit('offer', data);
+        const offerData = data || messageData;
+        this.emit('offer', offerData);
         break;
         
       case 'answer':
-        this.emit('answer', data);
+        const answerData = data || messageData;
+        this.emit('answer', answerData);
         break;
         
       case 'ice-candidate':
-        this.emit('ice-candidate', data);
-        break;
-        
-      case 'user-left':
-        this.emit('user-left', data);
+        const candidateData = data || messageData;
+        this.emit('ice-candidate', candidateData);
         break;
         
       case 'server-stats':
-        console.log('Server stats:', data);
+        const statsData = data || messageData;
+        console.log('Server stats:', statsData);
         break;
         
       default:
@@ -209,18 +330,43 @@ class SignalingService {
     });
   }
 
-  private sendMessage(message: any): void {
+  private async sendMessage(message: any): Promise<void> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      console.error('Cannot send message: not connected');
+      console.error('Cannot send message: WebSocket not connected, state:', this.socket?.readyState);
+      return;
+    }
+
+    // Check rate limiting
+    if (this.isRateLimited()) {
+      console.warn('Message rate limited');
       return;
     }
 
     try {
-      const messageStr = JSON.stringify(message);
-      console.log('Sending message:', messageStr);
-      this.socket.send(messageStr);
+      // Add security headers
+      const secureMessage = {
+        ...message,
+        sessionToken: this.sessionToken,
+        timestamp: Date.now(),
+        clientId: this.socketId
+      };
+
+      // Sanitize message
+      const sanitizedMessage = this.sanitizeInput(secureMessage);
+      
+      // In development mode, skip encryption for easier debugging
+      if (__DEV__) {
+        const messageStr = JSON.stringify(sanitizedMessage);
+        this.socket.send(messageStr);
+      } else {
+        // Encrypt message for production
+        const messageStr = JSON.stringify(sanitizedMessage);
+        const encryptedMessage = await this.encryptMessage(messageStr);
+        this.socket.send(encryptedMessage);
+      }
     } catch (error) {
       console.error('Failed to send message:', error);
+      console.error('Error details:', error instanceof Error ? error.message : 'Unknown error');
     }
   }
 

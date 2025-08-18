@@ -75,8 +75,8 @@ export const FloatingParticles: React.FC<FloatingParticlesProps> = ({
       id: index,
       x: new Animated.Value(Math.random() * width),
       y: new Animated.Value(Math.random() * height),
-      opacity: new Animated.Value(Math.random() * 0.4 + 0.2),
-      scale: new Animated.Value(Math.random() * 0.4 + 0.4),
+      opacity: new Animated.Value(Math.random() * 0.3 + 0.2),
+      scale: new Animated.Value(Math.random() * 0.2 + 0.2),
       color: colors[Math.floor(Math.random() * colors.length)],
       size: Math.random() * 6 + 8,
     }));
